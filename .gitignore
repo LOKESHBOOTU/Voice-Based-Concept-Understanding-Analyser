@@ -8,6 +8,7 @@ __pycache__/
 .env
 uploads/
 reports/
+data/
 vbcua.sqlite3
 *.log
 *.wav
@@ -17,3 +18,4 @@ vbcua.sqlite3
 *.ogg
 !samples/
 !samples/*.wav
+*.exe

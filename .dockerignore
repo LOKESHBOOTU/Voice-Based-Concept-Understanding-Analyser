@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.streamlit/secrets.toml
+.env
+uploads
+reports
+data
+vbcua.sqlite3
+*.log

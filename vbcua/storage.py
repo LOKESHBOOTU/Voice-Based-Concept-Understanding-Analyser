@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
-import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from typing import Iterator
+from contextlib import contextmanager
 
 from .config import DB_PATH
 from .models import AnalysisResult, ReferenceConcept
@@ -93,6 +94,10 @@ CREATE TABLE IF NOT EXISTS evaluation_result (
     sentiment_label VARCHAR(20),
     understanding_level VARCHAR(30),
     communication_level VARCHAR(30),
+    blooms_level VARCHAR(30),
+    wpm FLOAT,
+    rubric_json TEXT,
+    viva_json TEXT,
     summary TEXT,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -151,6 +156,22 @@ def migrate_schema(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE evaluation_result ADD COLUMN sentiment_label VARCHAR(20)"
         )
+    if "blooms_level" not in columns:
+        connection.execute(
+            "ALTER TABLE evaluation_result ADD COLUMN blooms_level VARCHAR(30)"
+        )
+    if "wpm" not in columns:
+        connection.execute(
+            "ALTER TABLE evaluation_result ADD COLUMN wpm FLOAT"
+        )
+    if "rubric_json" not in columns:
+        connection.execute(
+            "ALTER TABLE evaluation_result ADD COLUMN rubric_json TEXT"
+        )
+    if "viva_json" not in columns:
+        connection.execute(
+            "ALTER TABLE evaluation_result ADD COLUMN viva_json TEXT"
+        )
 
 
 def seed_reference_concepts(connection: sqlite3.Connection) -> None:
@@ -198,16 +219,19 @@ def save_analysis(
         user_id = None
         if user_name or user_email:
             cursor = connection.execute(
-                "INSERT INTO user (name, email, role) VALUES (?, ?, ?)",
+                """
+                INSERT INTO user (name, email, role)
+                VALUES (?, ?, ?)
+                """,
                 (user_name, user_email, role),
             )
             user_id = int(cursor.lastrowid)
 
         ref_id = get_or_create_reference(connection, result.concept)
+
         audio_cursor = connection.execute(
             """
-            INSERT INTO audio_file
-                (user_id, file_name, file_path, duration_sec, status)
+            INSERT INTO audio_file (user_id, file_name, file_path, duration_sec, status)
             VALUES (?, ?, ?, ?, ?)
             """,
             (
@@ -215,7 +239,7 @@ def save_analysis(
                 result.audio_path.name,
                 str(result.audio_path),
                 result.audio_features.duration_sec,
-                "evaluated",
+                "processed",
             ),
         )
         audio_id = int(audio_cursor.lastrowid)
@@ -275,15 +299,21 @@ def save_analysis(
             ),
         )
 
+        blooms_str = result.blooms.level if result.blooms else None
+        wpm_val = result.prosody.words_per_minute if result.prosody else None
+        rubric_str = json.dumps(asdict(result.rubric)) if result.rubric else None
+        viva_str = json.dumps([asdict(q) for q in result.viva.questions]) if result.viva else None
+
         result_cursor = connection.execute(
             """
             INSERT INTO evaluation_result
                 (
                     audio_id, ref_concept_id, overall_score, semantic_score,
                     fluency_score, sentiment_score, sentiment_label,
-                    understanding_level, communication_level, summary, notes
+                    understanding_level, communication_level, blooms_level, wpm,
+                    rubric_json, viva_json, summary, notes
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 audio_id,
@@ -295,6 +325,10 @@ def save_analysis(
                 result.sentiment.label,
                 result.score.understanding_level,
                 result.score.communication_level,
+                blooms_str,
+                wpm_val,
+                rubric_str,
+                viva_str,
                 result.summary,
                 "\n".join(result.score.feedback),
             ),
@@ -329,7 +363,7 @@ def save_report_record(
         return int(cursor.lastrowid)
 
 
-def recent_results(limit: int = 10, db_path: str | Path = DB_PATH) -> list[sqlite3.Row]:
+def recent_results(limit: int = 15, db_path: str | Path = DB_PATH) -> list[sqlite3.Row]:
     init_db(db_path)
     with connect(db_path) as connection:
         return list(
@@ -341,6 +375,8 @@ def recent_results(limit: int = 10, db_path: str | Path = DB_PATH) -> list[sqlit
                     er.overall_score,
                     er.understanding_level,
                     er.communication_level,
+                    er.blooms_level,
+                    er.wpm,
                     er.sentiment_label,
                     er.created_at
                 FROM evaluation_result er
@@ -351,3 +387,32 @@ def recent_results(limit: int = 10, db_path: str | Path = DB_PATH) -> list[sqlit
                 (limit,),
             )
         )
+
+
+def get_analytics_summary(db_path: str | Path = DB_PATH) -> dict[str, object]:
+    """Retrieves aggregated performance analytics for learner dashboards."""
+    init_db(db_path)
+    with connect(db_path) as connection:
+        total = connection.execute("SELECT COUNT(*) as cnt FROM evaluation_result").fetchone()["cnt"]
+        if not total:
+            return {"total_evaluations": 0, "avg_overall": 0.0, "avg_semantic": 0.0, "avg_fluency": 0.0}
+
+        row = connection.execute(
+            """
+            SELECT
+                COUNT(*) as count,
+                AVG(overall_score) as avg_overall,
+                AVG(semantic_score) as avg_semantic,
+                AVG(fluency_score) as avg_fluency,
+                AVG(wpm) as avg_wpm
+            FROM evaluation_result
+            """
+        ).fetchone()
+
+        return {
+            "total_evaluations": row["count"],
+            "avg_overall": round(float(row["avg_overall"] or 0.0) * 100, 1),
+            "avg_semantic": round(float(row["avg_semantic"] or 0.0) * 100, 1),
+            "avg_fluency": round(float(row["avg_fluency"] or 0.0) * 100, 1),
+            "avg_wpm": round(float(row["avg_wpm"] or 0.0), 1),
+        }

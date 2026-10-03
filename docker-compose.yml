@@ -1,0 +1,57 @@
+services:
+  vbcua-app:
+    build: .
+    container_name: vbcua-streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      VBCUA_UPLOAD_DIR: /app/uploads
+      VBCUA_REPORT_DIR: /app/reports
+      VBCUA_DB_PATH: /app/data/vbcua.sqlite3
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      SENTENCE_MODEL: ${SENTENCE_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - vbcua_uploads:/app/uploads
+      - vbcua_reports:/app/reports
+      - vbcua_data:/app/data
+      - vbcua_model_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  vbcua-api:
+    build: .
+    container_name: vbcua-api
+    command: ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      VBCUA_UPLOAD_DIR: /app/uploads
+      VBCUA_REPORT_DIR: /app/reports
+      VBCUA_DB_PATH: /app/data/vbcua.sqlite3
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      SENTENCE_MODEL: ${SENTENCE_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - vbcua_uploads:/app/uploads
+      - vbcua_reports:/app/reports
+      - vbcua_data:/app/data
+      - vbcua_model_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  vbcua_uploads:
+  vbcua_reports:
+  vbcua_data:
+  vbcua_model_cache:
